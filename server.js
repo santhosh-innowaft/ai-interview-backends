@@ -36,7 +36,6 @@ const InterviewState = Annotation.Root({
   role: { type: "string" },
   roleId: { type: "string", optional: true },
   selectedLanguage: { type: "string", optional: true },
-  selectedSubject: { type: "string", optional: true },
   selectedRound: { type: "string", optional: true },
   level: { type: "string" },
   language: { type: "string" },
@@ -64,19 +63,18 @@ const InterviewState = Annotation.Root({
 function initialState(overrides = {}) {
   return {
     candidateName: undefined,
-    role: "Software Engineer",
+    role:  "Software Engineer",
     roleId: undefined,
     selectedLanguage: undefined,
-    selectedSubject: undefined,
     selectedRound: undefined,
     level: "junior",
-    language: "en",
+    language:  "en",
 
     styleTemplate: undefined,
     transcript: [],
 
     turns: 0,
-    maxTurns: 6,   // number of interviewer replies (after greeting) before evaluation
+    maxTurns: 6 ,  // number of interviewer replies (after greeting) before evaluation
     done: false,
     overallScore: 0,
 
@@ -84,16 +82,35 @@ function initialState(overrides = {}) {
   };
 }
 
-function normalizeState(s = {}) {
+function normalizeState(s = {}, frontendValues = {}) {
+  // Helper to check if value is valid (not undefined, null, or empty string)
+  const isValid = (val) => val !== undefined && val !== null && val !== "";
+  
+  // Helper to preserve frontend values - use frontend values if provided, otherwise use state, otherwise default
+  const getValue = (key, defaultValue) => {
+    // Priority: frontend value > state value > default
+    if (isValid(frontendValues[key])) {
+      return String(frontendValues[key]).trim();
+    }
+    if (isValid(s[key])) {
+      const value = s[key];
+      if (typeof value === "string") {
+        return value.trim();
+      }
+      return value;
+    }
+    return defaultValue;
+  };
+
   return {
-    candidateName: s.candidateName ?? undefined,
-    role: s.role || "Software Engineer",
-    roleId: s.roleId ?? undefined,
-    selectedLanguage: s.selectedLanguage ?? undefined,
-    selectedSubject: s.selectedSubject ?? undefined,
-    selectedRound: s.selectedRound ?? undefined,
-    level: s.level || "junior",
-    language: s.language || "en",
+    // Use frontend values if available, otherwise preserve state, otherwise use defaults
+    candidateName: isValid(s.candidateName) ? String(s.candidateName).trim() : undefined,
+    role: getValue("role", "Software Engineer"),
+    roleId: isValid(s.roleId) ? s.roleId : undefined,
+    selectedLanguage: getValue("selectedLanguage", "java"),
+    selectedRound: getValue("selectedRound", "technical"),
+    level: getValue("level", "junior"),
+    language: getValue("language", "en"),
 
     styleTemplate: s.styleTemplate ?? undefined,
     transcript: Array.isArray(s.transcript) ? s.transcript : [],
@@ -115,27 +132,69 @@ async function llm(messages, { model = "gpt-4o-mini", temperature = 0.5 } = {}) 
 /* --------------------- Minimal LangGraph: persona only --------------------- */
 
 async function generateStyle(state) {
-  state = normalizeState(state);
-  let context = `${state.level} ${state.role} interview`;
-  if (state.selectedLanguage) {
+  // Don't normalize here - use state as-is to preserve frontend values
+  // normalizeState will be called after this
+  
+  // Map round IDs to round names and descriptions
+  const roundInfo = {
+    "technical": { name: "Technical Round", focus: "technical skills, problem-solving, coding abilities, algorithms, and data structures" },
+    "hr": { name: "HR Round", focus: "behavioral questions, communication skills, cultural fit, soft skills, and team collaboration" },
+    "managerial": { name: "Managerial Round", focus: "leadership, management experience, strategic thinking, decision-making, and team management" },
+    "system-design": { name: "System Design Round", focus: "architecture design, scalability, system planning, distributed systems, and technical architecture" },
+    "coding": { name: "Coding Round", focus: "live coding, algorithms, data structures, problem-solving, and code quality" },
+  };
+  
+  const round = state.selectedRound ? roundInfo[state.selectedRound] || { name: state.selectedRound, focus: "relevant skills" } : null;
+  
+  let context = `${state.level || "junior"} ${state.role || "Software Engineer"} interview`;
+  if (state.selectedLanguage && state.selectedLanguage.trim() !== "") {
     context += ` focusing on ${state.selectedLanguage}`;
   }
-  if (state.selectedSubject) {
-    context += ` covering ${state.selectedSubject}`;
+  if (round) {
+    context += ` for ${round.name}`;
   }
-  if (state.selectedRound) {
-    context += ` for ${state.selectedRound} round`;
-  }
+  
+  // Map language codes to language names for better LLM understanding
+  const languageNames = {
+    "en": "English",
+    "hi": "Hindi",
+    "te": "Telugu",
+    "ta": "Tamil",
+    "fr": "French",
+  };
+  
+  // Ensure we have a valid language - use the actual state value
+  const actualLanguage = state.language || "en";
+  const languageName = languageNames[actualLanguage] || actualLanguage;
+  
+  console.log("=== GENERATE STYLE - LANGUAGE & ROUND CHECK ===");
+  console.log({
+    stateLanguage: state.language,
+    actualLanguage: actualLanguage,
+    languageName: languageName,
+    selectedRound: state.selectedRound,
+    round: round ? round.name : "none",
+  });
+  
+  const roundContext = round ? ` This is a ${round.name}, so focus on ${round.focus}.` : "";
   
   const content = await llm(
     [
       {
         role: "user",
-        content: `Generate a short interviewer persona in language code: ${state.language}.
-Context: ${context}.
+        content: `You are an interviewer. Generate a short interviewer persona.
+
+CRITICAL LANGUAGE REQUIREMENT: You MUST respond in ${languageName} (language code: ${actualLanguage}). Every word you generate must be in ${languageName}. Do not use English or any other language.
+
+Context: ${context}.${roundContext}
+${round ? `ROUND TYPE: This is a ${round.name}. You MUST ask questions focused on: ${round.focus}.` : ""}
+
 Keep it to 2–3 sentences. Include tone/style + 1–2 rules (be concise, ask relevant follow-ups).
-Respond ONLY in ${state.language}.
-IMPORTANT: The persona should NOT instruct to use "Interviewer:" prefix or any speaker labels.`
+${round ? `As this is a ${round.name}, emphasize asking questions related to ${round.focus}.` : ""}
+
+IMPORTANT: 
+- Respond ONLY in ${languageName}. Do not use English or any other language.
+- The persona should NOT instruct to use "Interviewer:" prefix or any speaker labels.`
       }
     ],
     { temperature: 0.6 }
@@ -155,12 +214,22 @@ const styleGraph = buildStyleGraph();
 /* --------------------- Conversation helpers --------------------- */
 
 // TTS to the websocket as binary chunks
-async function ttsToWS(ws, text, voice = "alloy", format = "mp3") {
+async function ttsToWS(ws, text, voice = "alloy", format = "mp3", language = "en") {
+  // Log the text being sent to TTS for debugging
+  console.log("=== TTS REQUEST ===");
+  console.log({
+    language: language,
+    textPreview: text.substring(0, 100) + (text.length > 100 ? "..." : ""),
+    textLength: text.length,
+    voice: voice,
+  });
+  
   const audio = await openai.audio.speech.create({
-    model: "gpt-4o-mini-tts",
+    model: "tts-1", // Use tts-1 which has better multilingual support
     voice,
     input: text,
     format, // "mp3" | "wav"
+    // Note: OpenAI TTS auto-detects language from text, no language parameter available
   });
   const buf = Buffer.from(await audio.arrayBuffer());
   const CHUNK = 32 * 1024;
@@ -173,11 +242,53 @@ async function ttsToWS(ws, text, voice = "alloy", format = "mp3") {
 // Greeting to start the interview
 async function speakGreeting(ws, state, voice = "alloy") {
   const s = normalizeState(state);
+  
+  // Map language codes to language names for better LLM understanding
+  const languageNames = {
+    "en": "English",
+    "hi": "Hindi",
+    "te": "Telugu",
+    "ta": "Tamil",
+    "fr": "French",
+  };
+  
+  // Build greeting prompt with candidate name if provided
+  const candidateGreeting = s.candidateName && s.candidateName.trim() !== "" 
+    ? `Greet the candidate by name (${s.candidateName}) and`
+    : "Greet the candidate and";
+  
+  // Map round IDs to round names for greeting context
+  const roundInfo = {
+    "technical": { name: "Technical Round" },
+    "hr": { name: "HR Round" },
+    "managerial": { name: "Managerial Round" },
+    "system-design": { name: "System Design Round" },
+    "coding": { name: "Coding Round" },
+  };
+  const round = s.selectedRound ? roundInfo[s.selectedRound] || { name: s.selectedRound } : null;
+  
+  // Ensure we have a valid language
+  const actualLanguage = s.language || "en";
+  const languageName = languageNames[actualLanguage] || actualLanguage;
+  
+  console.log("=== SPEAK GREETING - LANGUAGE & ROUND CHECK ===");
+  console.log({
+    language: s.language,
+    actualLanguage: actualLanguage,
+    languageName: languageName,
+    selectedRound: s.selectedRound,
+    round: round ? round.name : "none",
+  });
+  
   const content = await llm(
     [
       {
         role: "system",
-        content: `You are a professional interviewer. Greet the candidate briefly in ${s.language}. 2 sentences max. Mention role (${s.role}) and level (${s.level}). Ask them to introduce themselves in ~30 seconds before we begin.
+        content: `You are a professional interviewer. ${candidateGreeting} briefly in ${languageName} (language code: ${actualLanguage}). 
+
+CRITICAL LANGUAGE REQUIREMENT: You MUST respond in ${languageName}. Every word must be in ${languageName}. Do not use English or any other language.
+
+2 sentences max. Mention role (${s.role}) and level (${s.level}).${round ? ` Mention that this is a ${round.name}.` : ""} Ask them to introduce themselves in ~30 seconds before we begin.
 
 CRITICAL RULE: You must NEVER start your response with the word 'Interviewer' or 'Interviewer:' or any speaker label. Always start directly with your greeting. Do not use any prefixes, labels, or speaker identifiers.`
       }
@@ -212,7 +323,18 @@ CRITICAL RULE: You must NEVER start your response with the word 'Interviewer' or
     cleaned = cleaned.replace(/^Interviewer\s*[:.\-\s]*\s*/i, "").trim();
   }
   
-  await ttsToWS(ws, cleaned, voice);
+  // Log the generated greeting text to verify it's in the correct language
+  console.log("=== GENERATED GREETING TEXT ===");
+  console.log({
+    language: s.language,
+    actualLanguage: actualLanguage,
+    languageName: languageName,
+    textPreview: cleaned.substring(0, 200) + (cleaned.length > 200 ? "..." : ""),
+    textLength: cleaned.length,
+  });
+  
+  // Pass language to TTS for logging
+  await ttsToWS(ws, cleaned, voice, "mp3", actualLanguage);
   return cleaned;
 }
 
@@ -226,22 +348,66 @@ async function generateInterviewerTurn(state) {
     .map((t) => `${t.from === "interviewer" ? "Interviewer" : "Candidate"}: ${t.text}`)
     .join("\n");
 
+  // Map language codes to language names for better LLM understanding
+  const languageNames = {
+    "en": "English",
+    "hi": "Hindi",
+    "te": "Telugu",
+    "ta": "Tamil",
+    "fr": "French",
+  };
+  
+  // Ensure we have a valid language - use the actual state value
+  const actualLanguage = s.language || "en";
+  const languageName = languageNames[actualLanguage] || actualLanguage;
+
+  // Map round IDs to round names and focus areas
+  const roundInfo = {
+    "technical": { name: "Technical Round", focus: "technical skills, problem-solving, coding abilities, algorithms, data structures, and technical depth" },
+    "hr": { name: "HR Round", focus: "behavioral questions, communication skills, cultural fit, soft skills, team collaboration, and work experience" },
+    "managerial": { name: "Managerial Round", focus: "leadership, management experience, strategic thinking, decision-making, team management, and conflict resolution" },
+    "system-design": { name: "System Design Round", focus: "architecture design, scalability, system planning, distributed systems, technical architecture, and trade-offs" },
+    "coding": { name: "Coding Round", focus: "live coding, algorithms, data structures, problem-solving, code quality, and optimization" },
+  };
+  
+  const round = s.selectedRound ? roundInfo[s.selectedRound] || { name: s.selectedRound, focus: "relevant skills" } : null;
+  
+  console.log("=== GENERATE INTERVIEWER TURN - LANGUAGE & ROUND CHECK ===");
+  console.log({
+    language: s.language,
+    actualLanguage: actualLanguage,
+    languageName: languageName,
+    selectedRound: s.selectedRound,
+    round: round ? round.name : "none",
+  });
+
   const systemPrompt = (s.styleTemplate || "You are an interviewer.") + 
     " CRITICAL RULE: You must NEVER start your response with the word 'Interviewer' or 'Interviewer:' or any speaker label. Always start directly with your question or statement. Do not use any prefixes, labels, or speaker identifiers.";
+  
+  const roundInstructions = round 
+    ? `This is a ${round.name} interview. Focus specifically on ${round.focus}. Ask questions that are appropriate for this round type.`
+    : "";
   
   const content = await llm(
     [
       { role: "system", content: systemPrompt },
       {
         role: "user",
-        content: `Conversation so far (reply in ${s.language}):
+        content: `Conversation so far:
 ${history || "(no previous messages)"}
 
-Now continue as the interviewer for a ${s.level} ${s.role} interview.
-Be natural: you may briefly acknowledge their answer (1 short sentence) and ask a focused follow-up.
-Keep it concise (20–60 words). One paragraph. Respond ONLY in ${s.language}.
+CRITICAL LANGUAGE REQUIREMENT: You MUST respond in ${languageName} (language code: ${s.language}). Every word you generate must be in ${languageName}. Do not use English or any other language.
 
-CRITICAL RULE: You must NEVER start your response with the word 'Interviewer' or 'Interviewer:' or any speaker label. Always start directly with your question or statement. Do not use any prefixes, labels, or speaker identifiers.`
+Now continue as the interviewer for a ${s.level} ${s.role} interview${round ? ` (${round.name})` : ""}.
+${roundInstructions}
+${round ? `ROUND TYPE: This is a ${round.name}. You MUST ask questions focused on: ${round.focus}.` : ""}
+
+Be natural: you may briefly acknowledge their answer (1 short sentence) and ask a focused follow-up that is relevant to ${round ? round.focus : "the role and level"}.
+Keep it concise (20–60 words). One paragraph. 
+
+CRITICAL REQUIREMENTS:
+1. Respond ONLY in ${languageName}. Do not use English or any other language.
+2. You must NEVER start your response with the word 'Interviewer' or 'Interviewer:' or any speaker label. Always start directly with your question or statement. Do not use any prefixes, labels, or speaker identifiers.`
       }
     ],
     { temperature: 0.7 }
@@ -273,6 +439,18 @@ CRITICAL RULE: You must NEVER start your response with the word 'Interviewer' or
   if (/^Interviewer/i.test(cleaned)) {
     cleaned = cleaned.replace(/^Interviewer\s*[:.\-\s]*\s*/i, "").trim();
   }
+  
+  // Log the generated text to verify it's in the correct language
+  console.log("=== GENERATED INTERVIEWER TEXT ===");
+  console.log({
+    language: s.language,
+    actualLanguage: actualLanguage,
+    languageName: languageName,
+    selectedRound: s.selectedRound,
+    round: round ? round.name : "none",
+    textPreview: cleaned.substring(0, 200) + (cleaned.length > 200 ? "..." : ""),
+    textLength: cleaned.length,
+  });
   
   return cleaned;
 }
@@ -315,9 +493,6 @@ async function evaluateConversation(state) {
   
   if (s.selectedLanguage) {
     contextInfo += `\n- Programming Language Focus: ${s.selectedLanguage}`;
-  }
-  if (s.selectedSubject) {
-    contextInfo += `\n- Subject: ${s.selectedSubject}`;
   }
   if (s.selectedRound) {
     contextInfo += `\n- Interview Round: ${s.selectedRound}`;
@@ -482,23 +657,144 @@ wss.on("connection", (ws) => {
       // START
       if (msg.type === "start") {
         sessionId = uuidv4();
-        voiceChoice = msg.voice || "alloy";
+        voiceChoice = msg.voice ?? "alloy";
 
-        let state = initialState({
-          candidateName: msg.candidateName ?? undefined,
-          role: msg.role || msg.roleName || "Software Engineer",
+        // Log received values for debugging
+        console.log("=== RECEIVED FROM FRONTEND ===");
+        console.log("Raw message values:", {
+          candidateName: msg.candidateName,
+          role: msg.role,
+          roleName: msg.roleName,
           roleId: msg.roleId,
           selectedLanguage: msg.selectedLanguage,
-          selectedSubject: msg.selectedSubject,
           selectedRound: msg.selectedRound,
-          level: msg.level || "junior",
-          language: msg.language || "en",
-          maxTurns: Number(msg.maxTurns || 6),
+          level: msg.level,
+          language: msg.language,
+          maxTurns: msg.maxTurns,
+        });
+        console.log("Value types:", {
+          role: typeof msg.role,
+          roleName: typeof msg.roleName,
+          selectedLanguage: typeof msg.selectedLanguage,
+          level: typeof msg.level,
+          language: typeof msg.language,
+        });
+
+        // Preserve frontend values - directly use them, only use defaults if truly missing (undefined/null/empty string)
+        // Frontend sends: role (roleName), roleId, selectedLanguage, selectedRound, level, language, maxTurns
+        // Helper to check if value is valid (not undefined, null, or empty string)
+        const isValid = (val) => val !== undefined && val !== null && val !== "";
+        
+        let state = {
+          candidateName: isValid(msg.candidateName) ? msg.candidateName : undefined,
+          role: isValid(msg.role) ? msg.role : 
+                (isValid(msg.roleName) ? msg.roleName : "Software Engineer"),
+          roleId: isValid(msg.roleId) ? msg.roleId : undefined,
+          selectedLanguage: isValid(msg.selectedLanguage) ? msg.selectedLanguage : "java",
+          selectedRound: isValid(msg.selectedRound) ? msg.selectedRound : "technical",
+          level: isValid(msg.level) ? msg.level : "junior",
+          language: isValid(msg.language) ? msg.language : "en",
+          maxTurns: (msg.maxTurns !== undefined && msg.maxTurns !== null) ? Number(msg.maxTurns) : 6,
+          styleTemplate: undefined,
+          transcript: [],
+          turns: 0,
+          done: false,
+          overallScore: 0,
+        };
+
+        console.log("=== STATE AFTER INITIALIZATION ===");
+        console.log({
+          candidateName: state.candidateName,
+          role: state.role,
+          roleId: state.roleId,
+          selectedLanguage: state.selectedLanguage,
+          selectedRound: state.selectedRound,
+          level: state.level,
+          language: state.language,
+          maxTurns: state.maxTurns,
         });
 
         // persona via LangGraph
+        // Store frontend values before LangGraph might modify them
+        const frontendValues = {
+          role: state.role,
+          roleId: state.roleId,
+          selectedLanguage: state.selectedLanguage,
+          selectedRound: state.selectedRound,
+          level: state.level,
+          language: state.language,
+        };
+        
         state = await styleGraph.invoke(state);
-        state = normalizeState(state);
+        
+        console.log("=== STATE AFTER STYLEGRAPH ===");
+        console.log({
+          role: state.role,
+          roleId: state.roleId,
+          selectedLanguage: state.selectedLanguage,
+          selectedRound: state.selectedRound,
+          level: state.level,
+          language: state.language,
+        });
+        
+        console.log("=== FRONTEND VALUES TO RESTORE ===");
+        console.log(frontendValues);
+        
+        // Restore frontend values that might have been modified by LangGraph
+        // IMPORTANT: Directly assign to ensure values are preserved
+        state.role = frontendValues.role;
+        state.roleId = frontendValues.roleId;
+        state.selectedLanguage = frontendValues.selectedLanguage;
+        state.selectedRound = frontendValues.selectedRound;
+        state.level = frontendValues.level;
+        state.language = frontendValues.language;
+        
+        console.log("=== STATE AFTER DIRECT ASSIGNMENT ===");
+        console.log({
+          role: state.role,
+          selectedRound: state.selectedRound,
+          language: state.language,
+        });
+        
+        // Only normalize fields that weren't set by frontend
+        state = normalizeState(state, frontendValues);
+        
+        console.log("=== FINAL STATE AFTER NORMALIZE ===");
+        console.log({
+          role: state.role,
+          roleId: state.roleId,
+          selectedLanguage: state.selectedLanguage,
+          selectedRound: state.selectedRound,
+          level: state.level,
+          language: state.language,
+        });
+        
+        // Verify round mapping
+        const roundInfo = {
+          "technical": { name: "Technical Round" },
+          "hr": { name: "HR Round" },
+          "managerial": { name: "Managerial Round" },
+          "system-design": { name: "System Design Round" },
+          "coding": { name: "Coding Round" },
+        };
+        const mappedRound = state.selectedRound ? roundInfo[state.selectedRound] : null;
+        
+        // Map language codes to language names for logging
+        const languageNames = {
+          "en": "English",
+          "hi": "Hindi",
+          "te": "Telugu",
+          "ta": "Tamil",
+          "fr": "French",
+        };
+        
+        console.log("=== ROUND MAPPING ===");
+        console.log({
+          selectedRound: state.selectedRound,
+          mappedRound: mappedRound,
+          language: state.language,
+          languageName: languageNames[state.language] || state.language,
+        });
         SESSIONS.set(sessionId, { state });
 
         ws.send(JSON.stringify({ type: "session", sessionId }));
@@ -579,7 +875,14 @@ wss.on("connection", (ws) => {
             transcript: state.transcript,
           }));
 
-          await ttsToWS(ws, reply, voiceChoice);
+          // Get language from state for TTS logging
+          const currentLanguage = state.language || "en";
+          console.log("=== SENDING INTERVIEWER REPLY TO TTS ===");
+          console.log({
+            language: currentLanguage,
+            textPreview: reply.substring(0, 200) + (reply.length > 200 ? "..." : ""),
+          });
+          await ttsToWS(ws, reply, voiceChoice, "mp3", currentLanguage);
           return;
         }
 
@@ -596,7 +899,14 @@ wss.on("connection", (ws) => {
           transcript: state.transcript,
         }));
 
-        await ttsToWS(ws, evaluation.summaryText, voiceChoice);
+        // Get language from state for TTS logging
+        const summaryLanguage = state.language || "en";
+        console.log("=== SENDING SUMMARY TO TTS ===");
+        console.log({
+          language: summaryLanguage,
+          textPreview: evaluation.summaryText.substring(0, 200) + (evaluation.summaryText.length > 200 ? "..." : ""),
+        });
+        await ttsToWS(ws, evaluation.summaryText, voiceChoice, "mp3", summaryLanguage);
         ws.send(JSON.stringify({
           type: "done",
           summaryText: evaluation.summaryText,
@@ -628,7 +938,14 @@ wss.on("connection", (ws) => {
           transcript: state.transcript,
         }));
 
-        await ttsToWS(ws, evaluation.summaryText, voiceChoice);
+        // Get language from state for TTS logging
+        const summaryLanguage = state.language || "en";
+        console.log("=== SENDING SUMMARY TO TTS ===");
+        console.log({
+          language: summaryLanguage,
+          textPreview: evaluation.summaryText.substring(0, 200) + (evaluation.summaryText.length > 200 ? "..." : ""),
+        });
+        await ttsToWS(ws, evaluation.summaryText, voiceChoice, "mp3", summaryLanguage);
         ws.send(JSON.stringify({
           type: "done",
           summaryText: evaluation.summaryText,
