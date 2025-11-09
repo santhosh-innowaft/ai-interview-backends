@@ -47,14 +47,10 @@ const wss = new WebSocketServer({
   perMessageDeflate: false
 });
 
-// OpenAI API key - must be set via environment variable
-// For local development, create a .env file with: OPENAI_API_KEY=your-key-here
-// For Cloud Run, set it via: --set-env-vars "OPENAI_API_KEY=your-key-here"
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-if (!OPENAI_API_KEY) {
-  console.error('ERROR: OPENAI_API_KEY environment variable is not set!');
-  console.error('Please set it via environment variable or .env file.');
-}
+// OpenAI API key with fallback (you can set your actual key here as fallback)
+// IMPORTANT: Replace 'your-openai-api-key-here' with your actual API key
+// Or set it via environment variable: OPENAI_API_KEY=sk-your-key-here
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || 'your-openai-api-key-here';
 console.log('OpenAI API Key configured:', OPENAI_API_KEY ? 'Yes' : 'No');
 
 // Google Cloud Run uses PORT env var, default to 8080 for production

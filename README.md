@@ -32,6 +32,8 @@ npm install
 
 ### Environment Variables
 
+**Option 1: Using .env file (Recommended for local development)**
+
 Create a `.env` file in the root directory:
 
 ```env
@@ -39,6 +41,16 @@ OPENAI_API_KEY=sk-your-openai-api-key-here
 PORT=3001
 NODE_ENV=development
 ```
+
+**Option 2: Hardcode as fallback (For convenience)**
+
+You can also set a fallback API key directly in `server.js` on line 51:
+
+```javascript
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || 'sk-your-openai-api-key-here';
+```
+
+**Note**: The environment variable takes precedence over the fallback. The fallback is useful if you forget to set the environment variable.
 
 ### Run Locally
 
@@ -147,9 +159,11 @@ This is your backend WebSocket URL. Use `wss://` (secure WebSocket) for producti
 
 | Variable | Description | Required | Default |
 |----------|-------------|----------|---------|
-| `OPENAI_API_KEY` | Your OpenAI API key | Yes | - |
+| `OPENAI_API_KEY` | Your OpenAI API key | Yes* | Fallback in server.js line 51 |
 | `PORT` | Server port | No | 8080 (production) / 3001 (dev) |
 | `NODE_ENV` | Environment | No | development |
+
+\* You can set the API key either via environment variable or as a fallback in `server.js` line 51. The environment variable takes precedence.
 
 ### Update Environment Variables
 
