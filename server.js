@@ -17,13 +17,49 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+
+// CORS middleware for Express
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  // Allow requests from Vercel domains and localhost
+  if (origin && (
+    origin.includes('vercel.app') || 
+    origin.includes('localhost') || 
+    origin.includes('127.0.0.1')
+  )) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({ 
+  server,
+  // CORS for WebSocket - allow connections from any origin in production
+  // In production, you may want to restrict this to your Vercel domain
+  perMessageDeflate: false
+});
 
-console.log(process.env.OPENAI_API_KEY );
+// OpenAI API key - must be set via environment variable
+// For local development, create a .env file with: OPENAI_API_KEY=your-key-here
+// For Cloud Run, set it via: --set-env-vars "OPENAI_API_KEY=your-key-here"
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+if (!OPENAI_API_KEY) {
+  console.error('ERROR: OPENAI_API_KEY environment variable is not set!');
+  console.error('Please set it via environment variable or .env file.');
+}
+console.log('OpenAI API Key configured:', OPENAI_API_KEY ? 'Yes' : 'No');
 
-const PORT = Number(process.env.PORT || 3001);
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// Google Cloud Run uses PORT env var, default to 8080 for production
+const PORT = Number(process.env.PORT || (process.env.NODE_ENV === 'production' ? 8080 : 3001));
+const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
 /* --------------------- Schema & State --------------------- */
 /** Conversational (voice-only) interview:
@@ -606,15 +642,20 @@ Be honest and strict. 5-8 sentences.`
 /* --------------------- Sessions --------------------- */
 
 const SESSIONS = new Map(); // sessionId -> { state }
-const TMP_DIR = path.join(__dirname, "tmp");
+// Use /tmp for Cloud Run (read-only filesystem except /tmp) or local tmp directory
+const TMP_DIR = process.env.NODE_ENV === 'production' ? '/tmp' : path.join(__dirname, "tmp");
 
-// Create tmp directory if it doesn't exist
-try {
-  if (!fs.existsSync(TMP_DIR)) {
-    fs.mkdirSync(TMP_DIR, { recursive: true });
+// Create tmp directory if it doesn't exist (only needed for local)
+if (process.env.NODE_ENV !== 'production') {
+  try {
+    if (!fs.existsSync(TMP_DIR)) {
+      fs.mkdirSync(TMP_DIR, { recursive: true });
+    }
+  } catch (err) {
+    console.warn('Could not create tmp directory:', err.message);
   }
-} catch (err) {
-  console.warn('Could not create tmp directory:', err.message);
+} else {
+  console.log('Using /tmp directory for Cloud Run');
 }
 
 /* --------------------- WS Protocol (voice-only, conversational) ---------------------
@@ -832,28 +873,66 @@ wss.on("connection", (ws) => {
         }
         let state = normalizeState(session.state);
 
+        // Check if we received any audio chunks
+        if (audioChunks.length === 0) {
+          console.warn("No audio chunks received for transcription");
+          state.transcript.push({ from: "candidate", text: "(no audio received)" });
+          ws.send(JSON.stringify({
+            type: "transcript_update",
+            transcript: state.transcript,
+          }));
+          return;
+        }
+
         // Save & transcribe (webm/opus)
-        const tmpPath = path.join(__dirname, `ans_${Date.now()}.webm`);
-        fs.writeFileSync(tmpPath, Buffer.concat(audioChunks));
+        const tmpPath = path.join(TMP_DIR, `ans_${Date.now()}.webm`);
+        const audioBuffer = Buffer.concat(audioChunks);
+        console.log(`Received ${audioChunks.length} audio chunks, total size: ${audioBuffer.length} bytes`);
+        
+        try {
+          fs.writeFileSync(tmpPath, audioBuffer);
+        } catch (writeError) {
+          console.error("Error writing audio file:", writeError);
+          state.transcript.push({ from: "candidate", text: "(error saving audio)" });
+          ws.send(JSON.stringify({
+            type: "transcript_update",
+            transcript: state.transcript,
+          }));
+          return;
+        }
 
         let transcriptText = "";
         try {
+          console.log("Starting transcription with Whisper...");
           const resp = await openai.audio.transcriptions.create({
             model: "whisper-1",
             file: fs.createReadStream(tmpPath),
             response_format: "json",
             temperature: 0,
+            language: state.language || "en",
           });
           transcriptText = (resp.text || "").trim();
+          console.log("Transcription result:", transcriptText || "(empty)");
         } catch (e) {
-          console.error("STT error:", e);
+          console.error("STT error:", e.message || e);
+          console.error("Error details:", {
+            code: e.code,
+            status: e.status,
+            type: e.type,
+            message: e.message
+          });
         } finally {
-          fs.unlink(tmpPath, () => {});
+          try {
+            fs.unlinkSync(tmpPath);
+          } catch (unlinkError) {
+            console.warn("Error deleting temp file:", unlinkError);
+          }
         }
 
         if (transcriptText) {
           state.transcript.push({ from: "candidate", text: transcriptText });
         } else {
+          console.warn("No transcription text received");
           state.transcript.push({ from: "candidate", text: "(no speech recognized)" });
         }
         // Send transcript update to frontend so UI can display user's answer
