@@ -17,13 +17,108 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+
+// CORS middleware for Express
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  
+  // Function to check if origin is allowed
+  const isAllowedOrigin = (origin) => {
+    if (!origin) return false;
+    
+    // Allow localhost with any port
+    if (origin.match(/^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?$/)) {
+      return true;
+    }
+    
+    // Allow Vercel domains
+    if (origin.includes('vercel.app')) {
+      return true;
+    }
+    
+    // Allow Google Cloud Run domains
+    if (origin.includes('.run.app')) {
+      return true;
+    }
+    
+    // In development, allow all origins for easier testing
+    if (process.env.NODE_ENV !== 'production') {
+      return true;
+    }
+    
+    return false;
+  };
+  
+  if (isAllowedOrigin(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
+  
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Max-Age', '86400'); // 24 hours
+  
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
 
-console.log(process.env.OPENAI_API_KEY );
+// WebSocket CORS verification function
+const verifyClient = (info) => {
+  const origin = info.origin;
+  
+  // Function to check if origin is allowed for WebSocket
+  const isAllowedOrigin = (origin) => {
+    if (!origin) return true; // Allow connections without origin (e.g., Postman, curl)
+    
+    // Allow localhost with any port
+    if (origin.match(/^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?$/)) {
+      return true;
+    }
+    
+    // Allow Vercel domains
+    if (origin.includes('vercel.app')) {
+      return true;
+    }
+    
+    // Allow Google Cloud Run domains
+    if (origin.includes('.run.app')) {
+      return true;
+    }
+    
+    // In development, allow all origins for easier testing
+    if (process.env.NODE_ENV !== 'production') {
+      return true;
+    }
+    
+    return false;
+  };
+  
+  const allowed = isAllowedOrigin(origin);
+  if (!allowed && origin) {
+    console.warn(`WebSocket connection rejected from origin: ${origin}`);
+  }
+  return allowed;
+};
 
-const PORT = Number(process.env.PORT || 3001);
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const wss = new WebSocketServer({ 
+  server,
+  verifyClient, // CORS verification for WebSocket connections
+  perMessageDeflate: false
+});
+
+// OpenAI API key with fallback (you can set your actual key here as fallback)
+// IMPORTANT: Replace 'your-openai-api-key-here' with your actual API key
+// Or set it via environment variable: OPENAI_API_KEY=sk-your-key-here
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || 'your-openai-api-key-here';
+console.log('OpenAI API Key configured:', OPENAI_API_KEY ? 'Yes' : 'No');
+
+// Google Cloud Run uses PORT env var, default to 8080 for production
+const PORT = Number(process.env.PORT || (process.env.NODE_ENV === 'production' ? 8080 : 3001));
+const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
 /* --------------------- Schema & State --------------------- */
 /** Conversational (voice-only) interview:
@@ -681,15 +776,20 @@ Be friendly, constructive, and specific. 8-12 sentences. Use a warm, supportive 
 /* --------------------- Sessions --------------------- */
 
 const SESSIONS = new Map(); // sessionId -> { state }
-const TMP_DIR = path.join(__dirname, "tmp");
+// Use /tmp for Cloud Run (read-only filesystem except /tmp) or local tmp directory
+const TMP_DIR = process.env.NODE_ENV === 'production' ? '/tmp' : path.join(__dirname, "tmp");
 
-// Create tmp directory if it doesn't exist
-try {
-  if (!fs.existsSync(TMP_DIR)) {
-    fs.mkdirSync(TMP_DIR, { recursive: true });
+// Create tmp directory if it doesn't exist (only needed for local)
+if (process.env.NODE_ENV !== 'production') {
+  try {
+    if (!fs.existsSync(TMP_DIR)) {
+      fs.mkdirSync(TMP_DIR, { recursive: true });
+    }
+  } catch (err) {
+    console.warn('Could not create tmp directory:', err.message);
   }
-} catch (err) {
-  console.warn('Could not create tmp directory:', err.message);
+} else {
+  console.log('Using /tmp directory for Cloud Run');
 }
 
 /* --------------------- WS Protocol (voice-only, conversational) ---------------------
@@ -911,28 +1011,66 @@ wss.on("connection", (ws) => {
         }
         let state = normalizeState(session.state);
 
+        // Check if we received any audio chunks
+        if (audioChunks.length === 0) {
+          console.warn("No audio chunks received for transcription");
+          state.transcript.push({ from: "candidate", text: "(no audio received)" });
+          ws.send(JSON.stringify({
+            type: "transcript_update",
+            transcript: state.transcript,
+          }));
+          return;
+        }
+
         // Save & transcribe (webm/opus)
-        const tmpPath = path.join(__dirname, `ans_${Date.now()}.webm`);
-        fs.writeFileSync(tmpPath, Buffer.concat(audioChunks));
+        const tmpPath = path.join(TMP_DIR, `ans_${Date.now()}.webm`);
+        const audioBuffer = Buffer.concat(audioChunks);
+        console.log(`Received ${audioChunks.length} audio chunks, total size: ${audioBuffer.length} bytes`);
+        
+        try {
+          fs.writeFileSync(tmpPath, audioBuffer);
+        } catch (writeError) {
+          console.error("Error writing audio file:", writeError);
+          state.transcript.push({ from: "candidate", text: "(error saving audio)" });
+          ws.send(JSON.stringify({
+            type: "transcript_update",
+            transcript: state.transcript,
+          }));
+          return;
+        }
 
         let transcriptText = "";
         try {
+          console.log("Starting transcription with Whisper...");
           const resp = await openai.audio.transcriptions.create({
             model: "whisper-1",
             file: fs.createReadStream(tmpPath),
             response_format: "json",
             temperature: 0,
+            language: state.language || "en",
           });
           transcriptText = (resp.text || "").trim();
+          console.log("Transcription result:", transcriptText || "(empty)");
         } catch (e) {
-          console.error("STT error:", e);
+          console.error("STT error:", e.message || e);
+          console.error("Error details:", {
+            code: e.code,
+            status: e.status,
+            type: e.type,
+            message: e.message
+          });
         } finally {
-          fs.unlink(tmpPath, () => {});
+          try {
+            fs.unlinkSync(tmpPath);
+          } catch (unlinkError) {
+            console.warn("Error deleting temp file:", unlinkError);
+          }
         }
 
         if (transcriptText) {
           state.transcript.push({ from: "candidate", text: transcriptText });
         } else {
+          console.warn("No transcription text received");
           state.transcript.push({ from: "candidate", text: "(no speech recognized)" });
         }
         // Send transcript update to frontend so UI can display user's answer
