@@ -21,17 +21,42 @@ const app = express();
 // CORS middleware for Express
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  // Allow requests from Vercel domains and localhost
-  if (origin && (
-    origin.includes('vercel.app') || 
-    origin.includes('localhost') || 
-    origin.includes('127.0.0.1')
-  )) {
+  
+  // Function to check if origin is allowed
+  const isAllowedOrigin = (origin) => {
+    if (!origin) return false;
+    
+    // Allow localhost with any port
+    if (origin.match(/^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?$/)) {
+      return true;
+    }
+    
+    // Allow Vercel domains
+    if (origin.includes('vercel.app')) {
+      return true;
+    }
+    
+    // Allow Google Cloud Run domains
+    if (origin.includes('.run.app')) {
+      return true;
+    }
+    
+    // In development, allow all origins for easier testing
+    if (process.env.NODE_ENV !== 'production') {
+      return true;
+    }
+    
+    return false;
+  };
+  
+  if (isAllowedOrigin(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
   }
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Max-Age', '86400'); // 24 hours
   
   if (req.method === 'OPTIONS') {
     return res.sendStatus(200);
@@ -40,10 +65,48 @@ app.use((req, res, next) => {
 });
 
 const server = http.createServer(app);
+
+// WebSocket CORS verification function
+const verifyClient = (info) => {
+  const origin = info.origin;
+  
+  // Function to check if origin is allowed for WebSocket
+  const isAllowedOrigin = (origin) => {
+    if (!origin) return true; // Allow connections without origin (e.g., Postman, curl)
+    
+    // Allow localhost with any port
+    if (origin.match(/^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?$/)) {
+      return true;
+    }
+    
+    // Allow Vercel domains
+    if (origin.includes('vercel.app')) {
+      return true;
+    }
+    
+    // Allow Google Cloud Run domains
+    if (origin.includes('.run.app')) {
+      return true;
+    }
+    
+    // In development, allow all origins for easier testing
+    if (process.env.NODE_ENV !== 'production') {
+      return true;
+    }
+    
+    return false;
+  };
+  
+  const allowed = isAllowedOrigin(origin);
+  if (!allowed && origin) {
+    console.warn(`WebSocket connection rejected from origin: ${origin}`);
+  }
+  return allowed;
+};
+
 const wss = new WebSocketServer({ 
   server,
-  // CORS for WebSocket - allow connections from any origin in production
-  // In production, you may want to restrict this to your Vercel domain
+  verifyClient, // CORS verification for WebSocket connections
   perMessageDeflate: false
 });
 
