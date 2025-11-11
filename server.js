@@ -41,6 +41,11 @@ app.use((req, res, next) => {
       return true;
     }
     
+    // Allow custom domains (HTTPS only in production)
+    if (process.env.NODE_ENV === 'production' && origin.startsWith('https://')) {
+      return true; // Allow any HTTPS origin in production (for custom domains)
+    }
+    
     // In development, allow all origins for easier testing
     if (process.env.NODE_ENV !== 'production') {
       return true;
@@ -89,6 +94,11 @@ const verifyClient = (info) => {
       return true;
     }
     
+    // Allow custom domains (HTTPS only in production)
+    if (process.env.NODE_ENV === 'production' && origin.startsWith('https://')) {
+      return true; // Allow any HTTPS origin in production (for custom domains)
+    }
+    
     // In development, allow all origins for easier testing
     if (process.env.NODE_ENV !== 'production') {
       return true;
@@ -113,7 +123,7 @@ const wss = new WebSocketServer({
 // OpenAI API key with fallback (you can set your actual key here as fallback)
 // IMPORTANT: Replace 'your-openai-api-key-here' with your actual API key
 // Or set it via environment variable: OPENAI_API_KEY=sk-your-key-here
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || 'your-openai-api-key-here';
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || 'YOUR_OPENAI_API_KEY_HERE';
 console.log('OpenAI API Key configured:', OPENAI_API_KEY ? 'Yes' : 'No');
 
 // Google Cloud Run uses PORT env var, default to 8080 for production
