@@ -132,6 +132,10 @@ const InterviewState = Annotation.Root({
   roleId: { type: "string", optional: true },
   customJobRole: { type: "string", optional: true },
   jobDescription: { type: "string", optional: true },
+  isSelfPrep: { type: "boolean", optional: true },
+  company: { type: "string", optional: true },
+  selectedCompany: { type: "string", optional: true },
+  customCompany: { type: "string", optional: true },
   selectedLanguage: { type: "string", optional: true },
   selectedRound: { type: "string", optional: true },
   level: { type: "string" },
@@ -164,6 +168,10 @@ function initialState(overrides = {}) {
     roleId: undefined,
     customJobRole: undefined,
     jobDescription: undefined,
+    isSelfPrep: false,
+    company: undefined,
+    selectedCompany: undefined,
+    customCompany: undefined,
     selectedLanguage: undefined,
     selectedRound: undefined,
     level: "junior",
@@ -208,6 +216,10 @@ function normalizeState(s = {}, frontendValues = {}) {
     roleId: isValid(s.roleId) ? s.roleId : undefined,
     customJobRole: isValid(s.customJobRole) ? String(s.customJobRole).trim() : undefined,
     jobDescription: isValid(s.jobDescription) ? String(s.jobDescription).trim() : undefined,
+    isSelfPrep: s.isSelfPrep === true || s.isSelfPrep === "true",
+    company: isValid(s.company) ? String(s.company).trim() : undefined,
+    selectedCompany: isValid(s.selectedCompany) ? String(s.selectedCompany).trim() : undefined,
+    customCompany: isValid(s.customCompany) ? String(s.customCompany).trim() : undefined,
     selectedLanguage: getValue("selectedLanguage", "java"),
     selectedRound: getValue("selectedRound", "technical"),
     level: getValue("level", "junior"),
@@ -251,6 +263,11 @@ async function generateStyle(state) {
   const jobRole = state.customJobRole || state.role || "Software Engineer";
   
   let context = `${state.level || "junior"} ${jobRole} interview`;
+  
+  // Add company information if company specific is selected
+  if (state.isSelfPrep && state.company && state.company.trim() !== "") {
+    context += ` for ${state.company.trim()}`;
+  }
   
   // Add job description to context if provided
   if (state.jobDescription && state.jobDescription.trim() !== "") {
@@ -406,6 +423,10 @@ async function speakGreeting(ws, state, voice = "alloy") {
   
   // Build greeting context with job description if available
   let greetingContext = `Mention role (${jobRole}) and level (${s.level}).`;
+  // Company specific interview - add company context
+  if (s.isSelfPrep && s.company && s.company.trim() !== "") {
+    greetingContext += ` Mention that this is a practice interview for ${s.company.trim()}.`;
+  }
   if (s.jobDescription && s.jobDescription.trim() !== "") {
     greetingContext += ` Briefly reference the job requirements if relevant.`;
   }
@@ -530,6 +551,10 @@ async function generateInterviewerTurn(state) {
   
   // Build job context with description
   let jobContext = `Role: ${jobRole} (${s.level} level)`;
+  // Company specific interview - add company context
+  if (s.isSelfPrep && s.company && s.company.trim() !== "") {
+    jobContext += `\n\nCompany: ${s.company.trim()}\n\nThis is a practice interview for ${s.company.trim()}. Tailor your questions to reflect the interview style, culture, and technical expectations typical of ${s.company.trim()}. Ask questions that would be relevant for someone interviewing at ${s.company.trim()}.`;
+  }
   if (s.jobDescription && s.jobDescription.trim() !== "") {
     jobContext += `\n\nJob Description:\n${s.jobDescription.trim()}\n\nUse this job description to tailor your questions to the specific role requirements, responsibilities, and skills needed. Ask questions that are directly relevant to what the job description mentions.`;
   }
