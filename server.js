@@ -1002,6 +1002,7 @@ wss.on("connection", (ws) => {
   let sessionId = null;
   let audioChunks = [];
   let voiceChoice = "alloy";
+  let audioFormat = "webm"; // Default format, will be updated from client
   
   // Log connection for debugging
   console.log(`WebSocket connection opened. NODE_ENV: ${process.env.NODE_ENV || 'development'}`);
@@ -1264,6 +1265,8 @@ wss.on("connection", (ws) => {
       // BEGIN audio
       if (msg.type === "answer_audio_start") {
         audioChunks = [];
+        audioFormat = msg.format || "webm"; // Store format from client
+        console.log(`Audio recording started with format: ${audioFormat}`);
         return;
       }
 
@@ -1292,10 +1295,15 @@ wss.on("connection", (ws) => {
           return;
         }
 
-        // Save & transcribe (webm/opus)
-        const tmpPath = path.join(TMP_DIR, `ans_${Date.now()}.webm`);
+        // Determine file extension based on format (default to webm for backward compatibility)
+        const fileExtension = audioFormat === 'mp4' ? 'mp4' : 
+                             audioFormat === 'aac' ? 'm4a' : 
+                             'webm';
+        
+        // Save & transcribe (webm/opus or mp4/aac)
+        const tmpPath = path.join(TMP_DIR, `ans_${Date.now()}.${fileExtension}`);
         const audioBuffer = Buffer.concat(audioChunks);
-        console.log(`Received ${audioChunks.length} audio chunks, total size: ${audioBuffer.length} bytes`);
+        console.log(`Received ${audioChunks.length} audio chunks, total size: ${audioBuffer.length} bytes, format: ${audioFormat}`);
         
         try {
           fs.writeFileSync(tmpPath, audioBuffer);
